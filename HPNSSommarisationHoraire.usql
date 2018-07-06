@@ -1,0 +1,810 @@
+DECLARE @inputdir string = "/HPNSInput/";
+DECLARE @outputdir string = "/HPNSOutput/";
+DECLARE @annee string = "2018";
+DECLARE @mois string = "06";
+DECLARE @jour string = "02";
+DECLARE @datejour string = @annee + "-" + @mois + "-" + @jour;
+DECLARE @uctfilename = "_tandem_Cpu.csv{*}gz";
+DECLARE @memfilename = "_tandem_mem_esp_disk_crypto.csv{*}gz";
+DECLARE @volumfilename = "_tandem_volum.csv{*}gz";
+DECLARE @disqfilename = "_tandem_io_disk.csv{*}gz";
+DECLARE @reseaufilename = "_tandem_reseau.csv{*}gz";
+
+// Importer les fichiers sources dans un rowset chaque
+@uctinput =
+	EXTRACT
+		DateJMA		string,
+		HeureMin	string,
+		IDCpu		int,
+		TypeCpu		string,
+		IDServeur	string,
+		UtilCpu		int,
+		SeuilCpu	int,
+		SeqSeuilCpu	int
+	FROM @inputdir + @datejour + @uctfilename
+	USING Extractors.Csv();
+
+@disqinput =
+	EXTRACT
+		DateJMA			string,
+		HeureMin		string,
+		IDProcDisq		string,
+		IDServeur		string,
+		InOutPS			float,
+		LecPS			float,
+		EcrPS			float,
+		QueueLength		float,
+		TpsReponse		float,
+		SeuilIODisqPS	int,
+		SeqSeuilIODisq	int
+	FROM @inputdir + @datejour + @disqfilename
+	USING Extractors.Csv();
+
+@meminput =
+	EXTRACT
+		DateJMA			string,
+		HeureMin		string,
+		IDServeur		string,
+		UtilMem			int,
+		MemTotal		int,
+		UtilEspDisq		int,
+		EspDisqTotal	int,
+		OpsCrypto		int,
+		SeuilEspDisq	int,
+		SeqSeuilEspDisq int
+	FROM @inputdir + @datejour + @memfilename
+	USING Extractors.Csv();
+
+@reseauinput =
+	EXTRACT
+		DateJMA		string,
+		HeureMin	string,
+		IDServeur	string,
+		NomIntPhys	string,
+		NomIntLog	string,
+		DescIntLog	string,
+		UtilInt		int
+	FROM @inputdir + @datejour + @reseaufilename
+	USING Extractors.Csv();
+
+@voluminput =
+	EXTRACT
+		DateJMA		string,
+		HeureMin	string,
+		TypeTr		string,
+		IDServeur	string,
+		Transac		int,
+		SeuilTPS	int?,
+		SeqSeuilTr	int?
+	FROM @inputdir + @datejour + @volumfilename
+	USING Extractors.Csv();
+
+// Ajout de champ distinct pour heure sans minute (Res + Disq)
+@disqinput =
+	SELECT
+		*,
+		HeureMin.Substring(0, 2).TrimEnd(':') AS Heure
+	FROM @disqinput;
+
+@reseauinput =
+	SELECT
+		*,
+		HeureMin.Substring(0, 2).TrimEnd(':') AS Heure
+	FROM @reseauinput;
+
+// Separation des deux sections du fichier volum
+@voluminputautre =
+	SELECT * FROM @voluminput
+	WHERE TypeTr != "TPS";
+
+@voluminputtps =
+	SELECT * FROM @voluminput
+	WHERE TypeTr == "TPS";
+
+// Traitement des rowsets
+// RESEAU
+@detReseauHeure =
+	SELECT
+		DateJMA,
+		Heure,
+		IDServeur,
+		NomIntPhys,
+		NomIntLog,
+		DescIntLog,
+		AVG(UtilInt) AS UtilIntMoy,
+		MAX(UtilInt) AS UtilIntMax
+	FROM @reseauinput
+	GROUP BY DateJMA, Heure, IDServeur, NomIntPhys, NomIntLog, DescIntLog;
+
+@sommHeureReseau =
+	SELECT
+		String.Concat(DateJMA, Heure, IDServeur, NomIntPhys, NomIntLog, DescIntLog) AS Cle,
+		UtilIntMoy,
+		UtilIntMax
+	FROM @detReseauHeure;
+
+// DISQUES
+@detDisqHeure =
+	SELECT
+		DateJMA,
+		Heure,
+		IDProcDisq,
+		IDServeur,
+		AVG(InOutPS) AS InOutPSMoy,
+		MAX(InOutPS) AS InOutPSMax,
+		AVG(LecPS) AS LecPSMoy,
+		MAX(LecPS) AS LecPSMax,
+		AVG(EcrPS) AS EcrPSMoy,
+		MAX(EcrPS) AS EcrPSMax,
+		AVG(QueueLength) AS QueueLengthMoy,
+		MAX(QueueLength) AS QueueLengthMax,
+		AVG(TpsReponse) AS TpsReponseMoy,
+		MAX(TpsReponse) AS TpsReponseMax,
+		MAX(SeuilIODisqPS) AS SeuilIODisqPSMax
+	FROM @disqinput
+	GROUP BY DateJMA, Heure, IDProcDisq, IDServeur;
+
+@sommHeureDisques =
+	SELECT
+		String.Concat(DateJMA, Heure, IDProcDisq, IDServeur) AS Cle,
+		InOutPSMoy,
+		InOutPSMax,
+		LecPSMoy,
+		LecPSMax,
+		EcrPSMoy,
+		EcrPSMax,
+		QueueLengthMoy,
+		QueueLengthMax,
+		TpsReponseMoy,
+		TpsReponseMax,
+		SeuilIODisqPSMax
+	FROM @detDisqHeure;
+
+// MACHINES
+// MACHINES
+@detMCD =
+	SELECT
+		DateJMA,
+		HeureMin,
+		IDServeur,
+		UtilMem,
+		MemTotal,
+		UtilEspDisq,
+		EspDisqTotal,
+		OpsCrypto,
+		SeuilEspDisq
+	FROM @meminput;
+
+@detUVinputone =
+	SELECT
+		DateJMA,
+		HeureMin,
+		IDServeur,
+		AVG(UtilCpu) AS UtilCpuMoy,
+		MAX(SeuilCpu) AS SeuilCpuMax
+	FROM @uctinput
+	GROUP BY DateJMA, HeureMin, IDServeur;
+
+@credita =
+	SELECT
+		DateJMA,
+		HeureMin,
+		IDServeur,
+		Transac AS TransacCRA
+	FROM @voluminputautre
+	WHERE TypeTr == "CREDITA";
+
+@credita =	
+	SELECT * FROM @credita
+	GROUP BY DateJMA, HeureMin, IDServeur, TransacCRA;
+
+@pdia =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacPDIA
+	FROM @voluminputautre
+	WHERE TypeTr == "PDIA";
+
+@pdia =	
+	SELECT * FROM @pdia
+	GROUP BY DateJMA, HeureMin, TransacPDIA;
+
+@creditd =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacCRD
+	FROM @voluminputautre
+	WHERE TypeTr == "CREDITD";
+
+@creditd =	
+	SELECT * FROM @creditd
+	GROUP BY DateJMA, HeureMin, TransacCRD;
+
+@pdd =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacPDD
+	FROM @voluminputautre
+	WHERE TypeTr == "PDD";
+
+@pdd =	
+	SELECT * FROM @pdd
+	GROUP BY DateJMA, HeureMin, TransacPDD;
+
+@credite =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacCRE
+	FROM @voluminputautre
+	WHERE TypeTr == "CREDITE";
+
+@credite =	
+	SELECT * FROM @credite
+	GROUP BY DateJMA, HeureMin, TransacCRE;
+
+@pdie =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacPDIE
+	FROM @voluminputautre
+	WHERE TypeTr == "PDIE";
+
+@pdie =	
+	SELECT * FROM @pdie
+	GROUP BY DateJMA, HeureMin, TransacPDIE;
+
+@avdfa =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacAVA
+	FROM @voluminputautre
+	WHERE TypeTr == "AVDFA";
+
+@avdfa =	
+	SELECT * FROM @avdfa
+	GROUP BY DateJMA, HeureMin, TransacAVA;
+
+@avdfe =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacAVE
+	FROM @voluminput
+	WHERE TypeTr == "AVDFE";
+
+@avdfe =	
+	SELECT * FROM @avdfe
+	GROUP BY DateJMA, HeureMin, TransacAVE;
+
+@avdfd =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacAVD
+	FROM @voluminputautre
+	WHERE TypeTr == "AVDFD";
+
+@avdfd =	
+	SELECT * FROM @avdfd
+	GROUP BY DateJMA, HeureMin, TransacAVD;
+
+@atma =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacATMA
+	FROM @voluminputautre
+	WHERE TypeTr == "ATMA";
+
+@atma =	
+	SELECT * FROM @atma
+	GROUP BY DateJMA, HeureMin, TransacATMA;
+
+@atme =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacATME
+	FROM @voluminputautre
+	WHERE TypeTr == "ATME";
+
+@atme =	
+	SELECT * FROM @atme
+	GROUP BY DateJMA, HeureMin, TransacATME;
+
+@autre =
+	SELECT
+		DateJMA,
+		HeureMin,
+		Transac AS TransacAUT
+	FROM @voluminputautre
+	WHERE TypeTr == "AUTRE";
+
+@autre =	
+	SELECT * FROM @autre
+	GROUP BY DateJMA, HeureMin, TransacAUT;
+
+@trans =
+	SELECT
+		cra.DateJMA,
+		cra.HeureMin,
+		cra.IDServeur,
+		cra.TransacCRA,
+		pdia.TransacPDIA,
+		crd.TransacCRD,
+		pdd.TransacPDD,
+		cre.TransacCRE,
+		pdie.TransacPDIE,
+		ava.TransacAVA,
+		ave.TransacAVE,
+		avd.TransacAVD,
+		atma.TransacATMA,
+		atme.TransacATME,
+		aut.TransacAUT
+	FROM @credita AS cra
+	FULL OUTER JOIN
+	@pdia AS pdia ON (cra.DateJMA == pdia.DateJMA AND cra.HeureMin == pdia.HeureMin)
+	FULL OUTER JOIN
+	@creditd AS crd ON (cra.DateJMA == crd.DateJMA AND cra.HeureMin == crd.HeureMin)
+	FULL OUTER JOIN
+	@pdd AS pdd ON (cra.DateJMA == pdd.DateJMA AND cra.HeureMin == pdd.HeureMin)
+	FULL OUTER JOIN
+	@credite AS cre ON (cra.DateJMA == cre.DateJMA AND cra.HeureMin == cre.HeureMin)
+	FULL OUTER JOIN
+	@pdie AS pdie ON (cra.DateJMA == pdie.DateJMA AND cra.HeureMin == pdie.HeureMin)
+	FULL OUTER JOIN
+	@avdfa AS ava ON (cra.DateJMA == ava.DateJMA AND cra.HeureMin == ava.HeureMin)
+	FULL OUTER JOIN
+	@avdfe AS ave ON (cra.DateJMA == ave.DateJMA AND cra.HeureMin == ave.HeureMin)
+	FULL OUTER JOIN
+	@avdfd AS avd ON (cra.DateJMA == avd.DateJMA AND cra.HeureMin == avd.HeureMin)
+	FULL OUTER JOIN
+	@atma AS atma ON (cra.DateJMA == atma.DateJMA AND cra.HeureMin == atma.HeureMin)
+	FULL OUTER JOIN
+	@atme AS atme ON (cra.DateJMA == atme.DateJMA AND cra.HeureMin == atme.HeureMin)
+	FULL OUTER JOIN
+	@autre AS aut ON (cra.DateJMA == aut.DateJMA AND cra.HeureMin == aut.HeureMin);
+
+@trans =
+    SELECT *,
+           (TransacCRA + TransacPDIA + TransacCRD + TransacPDD + TransacCRE + TransacPDIE + TransacAVA + TransacAVE + TransacAVD + TransacATMA + TransacATME + TransacAUT) AS TransacTOT
+    FROM @trans;
+
+@detUVinputtwo =
+	SELECT
+		*,
+		(TransacCRA / 60.0) AS TransacPSCRA,
+        (TransacPDIA / 60.0) AS TransacPSPDIA,
+        (TransacCRD / 60.0) AS TransacPSCRD,
+        (TransacPDD / 60.0) AS TransacPSPDD,
+        (TransacCRE / 60.0) AS TransacPSCRE,
+        (TransacPDIE / 60.0) AS TransacPSPDIE,
+        (TransacAVA / 60.0) AS TransacPSAVA,
+        (TransacAVE / 60.0) AS TransacPSAVE,
+        (TransacAVD / 60.0) AS TransacPSAVD,
+        (TransacATMA / 60.0) AS TransacPSATMA,
+        (TransacATME / 60.0) AS TransacPSATME,
+        (TransacAUT / 60.0) AS TransacPSAUT,
+        (TransacTOT / 60.0) AS TransacPSTOT
+	FROM @trans;
+
+@detUVinputthree =
+	SELECT
+		DateJMA,
+		HeureMin,
+		IDServeur,
+		Transac AS TransacTPS,
+		SeuilTPS
+	FROM @voluminputtps;
+
+@detUVinputthree =
+	SELECT * FROM @detUVinputthree
+	GROUP BY DateJMA, HeureMin, IDServeur, TransacTPS, SeuilTPS;
+
+@detUVvolumin =
+	SELECT
+        i2.*,
+		i3.TransacTPS,
+		i3.SeuilTPS
+	FROM @detUVinputtwo AS i2
+	FULL OUTER JOIN
+	@detUVinputthree AS i3 ON (i2.DateJMA == i3.DateJMA AND i2.HeureMin == i3.HeureMin AND i2.IDServeur == i3.IDServeur);
+
+@detUVvolumin =
+    SELECT
+        DateJMA,
+        HeureMin,
+        IDServeur,
+        (long?)0 AS UtilCpuMoy,
+        (int?)0 AS SeuilCpuMax,
+        TransacCRA,
+        TransacPDIA,
+        TransacCRD,
+        TransacPDD,
+        TransacCRE,
+        TransacPDIE,
+        TransacAVA,
+        TransacAVE,
+        TransacAVD,
+        TransacATMA,
+        TransacATME,
+        TransacAUT,
+        TransacTOT,
+        TransacPSCRA,
+        TransacPSPDIA,
+        TransacPSCRD,
+        TransacPSPDD,
+        TransacPSCRE,
+        TransacPSPDIE,
+        TransacPSAVA,
+        TransacPSAVE,
+        TransacPSAVD,
+        TransacPSATMA,
+        TransacPSATME,
+        TransacPSAUT,
+        TransacPSTOT,
+        TransacTPS,
+        SeuilTPS
+    FROM @detUVvolumin;
+
+@detUVuctin =
+    SELECT * FROM @detUVinputone;
+
+@detUVuctin =
+	SELECT
+		DateJMA,
+		HeureMin,
+		IDServeur,
+		UtilCpuMoy,
+		SeuilCpuMax,
+        (int?)0 AS TransacCRA,
+        (int?)0 AS TransacPDIA,
+        (int?)0 AS TransacCRD,
+        (int?)0 AS TransacPDD,
+        (int?)0 AS TransacCRE,
+        (int?)0 AS TransacPDIE,
+        (int?)0 AS TransacAVA,
+        (int?)0 AS TransacAVE,
+        (int?)0 AS TransacAVD,
+        (int?)0 AS TransacATMA,
+        (int?)0 AS TransacATME,
+        (int?)0 AS TransacAUT,
+        (int?)0 AS TransacTOT,
+        (double?)0 AS TransacPSCRA,
+        (double?)0 AS TransacPSPDIA,
+        (double?)0 AS TransacPSCRD,
+        (double?)0 AS TransacPSPDD,
+        (double?)0 AS TransacPSCRE,
+        (double?)0 AS TransacPSPDIE,
+        (double?)0 AS TransacPSAVA,
+        (double?)0 AS TransacPSAVE,
+        (double?)0 AS TransacPSAVD,
+        (double?)0 AS TransacPSATMA,
+        (double?)0 AS TransacPSATME,
+        (double?)0 AS TransacPSAUT,
+        (double?)0 AS TransacPSTOT,
+        (int?)0 AS TransacTPS,
+       	(int?)0 AS SeuilTPS
+    FROM @detUVuctin;
+
+@detUV =
+	SELECT * FROM @detUVuctin
+	UNION ALL
+	SELECT * FROM @detUVvolumin;
+
+// Fichiers Details termines, debut de la sommarisation pour Machines
+@detMCDHr =
+	SELECT
+		*,
+		HeureMin.Substring(0, 2).TrimEnd(':') AS Heure
+	FROM @detMCD;
+
+@detMCDHr =
+    SELECT
+        DateJMA,
+        Heure,
+        IDServeur,
+        AVG(UtilMem) AS UtilMemMoy,
+        MAX(UtilMem) AS UtilMemMax,
+        MAX(MemTotal) AS MemTotalMax,
+        AVG(UtilEspDisq) AS UtilEspDisqMoy,
+        MAX(UtilEspDisq) AS UtilEspDisqMax,
+        MAX(EspDisqTotal) AS EspDisqTotalMax,
+        AVG(OpsCrypto) AS OpsCryptoMoy,
+        MAX(OpsCrypto) AS OpsCryptoMax,
+        MAX(SeuilEspDisq) AS SeuilEspDisqMax
+    FROM @detMCDHr
+    GROUP BY DateJMA, Heure, IDServeur;
+
+@detUVaqti =
+	SELECT * FROM @detUV
+	WHERE IDServeur == "\\AQTI1";
+
+@detUVaqtiHr =
+	SELECT
+        DateJMA,
+		HeureMin.Substring(0, 2).TrimEnd(':') AS Heure,
+		IDServeur,
+		UtilCpuMoy,
+		SeuilCpuMax
+	FROM @detUVaqti;
+
+@detUVaqtiHr =
+	SELECT
+		DateJMA,
+		Heure,
+		IDServeur,
+		AVG(UtilCpuMoy) AS UtilCpuMoyHr,
+		MAX(UtilCpuMoy) AS UtilCpuMaxHr,
+		MAX(SeuilCpuMax) AS SeuilCpuMaxHr
+	FROM @detUVaqtiHr
+	GROUP BY DateJMA, Heure, IDServeur;
+
+@detUVmona =
+	SELECT * FROM @detUV
+	WHERE IDServeur == "\\MONA";
+
+@detUVmonaHr =
+	SELECT
+		*,
+		HeureMin.Substring(0, 2).TrimEnd(':') AS Heure
+	FROM @detUVmona;
+
+@detUVmonaHr =
+	SELECT
+		DateJMA,
+		Heure,
+		IDServeur,
+		SUM(TransacCRA) AS TCRASommeHr,
+		SUM(TransacPDIA) AS TPDIASommeHr,
+		SUM(TransacCRD) AS TCRDSommeHr,
+		SUM(TransacPDD) AS TPDDSommeHr,
+		SUM(TransacCRE) AS TCRESommeHr,
+		SUM(TransacPDIE) AS TPDIESommeHr,
+		SUM(TransacAVA) AS TAVASommeHr,
+		SUM(TransacAVE) AS TAVESommeHr,
+		SUM(TransacAVD) AS TAVDSommeHr,
+		SUM(TransacATMA) AS TATMASommeHr,
+		SUM(TransacATME) AS TATMESommeHr,
+		SUM(TransacAUT) AS TAUTSommeHr,
+		SUM(TransacTOT) AS TTOTSommeHr,
+		AVG(TransacPSCRA) AS TCRAPSMoyHr,
+		AVG(TransacPSPDIA) AS TPDIAPSMoyHr,
+		AVG(TransacPSCRD) AS TCRDPSMoyHr,
+		AVG(TransacPSPDD) AS TPDDPSMoyHr,
+		AVG(TransacPSCRE) AS TCREPSMoyHr,
+		AVG(TransacPSPDIE) AS TPDIEPSMoyHr,
+		AVG(TransacPSAVA) AS TAVAPSMoyHr,
+		AVG(TransacPSAVE) AS TAVEPSMoyHr,
+		AVG(TransacPSAVD) AS TAVDPSMoyHr,
+		AVG(TransacPSATMA) AS TATMAPSMoyHr,
+		AVG(TransacPSATME) AS TATMEPSMoyHr,
+		AVG(TransacPSAUT) AS TAUTPSMoyHr,
+		AVG(TransacPSTOT) AS TTOTPSMoyHr,
+		MAX(TransacPSCRA) AS TCRAPSMaxHr,
+		MAX(TransacPSPDIA) AS TPDIAPSMaxHr,
+		MAX(TransacPSCRD) AS TCRDPSMaxHr,
+		MAX(TransacPSPDD) AS TPDDPSMaxHr,
+		MAX(TransacPSCRE) AS TCREPSMaxHr,
+		MAX(TransacPSPDIE) AS TPDIEPSMaxHr,
+		MAX(TransacPSAVA) AS TAVAPSMaxHr,
+		MAX(TransacPSAVE) AS TAVEPSMaxHr,
+		MAX(TransacPSAVD) AS TAVDPSMaxHr,
+		MAX(TransacPSATMA) AS TATMAPSMaxHr,
+		MAX(TransacPSATME) AS TATMEPSMaxHr,
+		MAX(TransacPSAUT) AS TAUTPSMaxHr,
+		AVG(TransacTPS) AS TransacTPSMoy,
+		MAX(TransacTPS) AS TransacTPSMax,
+		MAX(SeuilTPS) AS SeuilTPSMax
+	FROM @detUVmonaHr
+	GROUP BY DateJMA, Heure, IDServeur;
+
+@aqtiHr =
+	SELECT
+		dmcdhr.DateJMA,
+		dmcdhr.Heure,
+		dmcdhr.IDServeur,
+		dmcdhr.UtilMemMoy,
+        dmcdhr.UtilMemMax,
+        dmcdhr.MemTotalMax,
+        dmcdhr.UtilEspDisqMoy,
+        dmcdhr.UtilEspDisqMax,
+        dmcdhr.EspDisqTotalMax,
+        dmcdhr.OpsCryptoMoy,
+        dmcdhr.OpsCryptoMax,
+        dmcdhr.SeuilEspDisqMax,
+        daqhr.UtilCpuMoyHr,
+		daqhr.UtilCpuMaxHr,
+		daqhr.SeuilCpuMaxHr
+	FROM @detMCDHr AS dmcdhr
+	FULL OUTER JOIN
+	@detUVaqtiHr AS daqhr ON (dmcdhr.Heure == daqhr.Heure);
+
+@aqtiHrExt =
+	SELECT
+		aqti.*,
+		(long?)0 AS TCRASommeHr,
+		(long?)0 AS TPDIASommeHr,
+		(long?)0 AS TCRDSommeHr,
+		(long?)0 AS TPDDSommeHr,
+		(long?)0 AS TCRESommeHr,
+		(long?)0 AS TPDIESommeHr,
+		(long?)0 AS TAVASommeHr,
+		(long?)0 AS TAVESommeHr,
+		(long?)0 AS TAVDSommeHr,
+		(long?)0 AS TATMASommeHr,
+		(long?)0 AS TATMESommeHr,
+		(long?)0 AS TAUTSommeHr,
+		(long?)0 AS TTOTSommeHr,
+		(double?)0 AS TCRAPSMoyHr,
+		(double?)0 AS TPDIAPSMoyHr,
+		(double?)0 AS TCRDPSMoyHr,
+		(double?)0 AS TPDDPSMoyHr,
+		(double?)0 AS TCREPSMoyHr,
+		(double?)0 AS TPDIEPSMoyHr,
+		(double?)0 AS TAVAPSMoyHr,
+		(double?)0 AS TAVEPSMoyHr,
+		(double?)0 AS TAVDPSMoyHr,
+		(double?)0 AS TATMAPSMoyHr,
+		(double?)0 AS TATMEPSMoyHr,
+		(double?)0 AS TAUTPSMoyHr,
+		(double?)0 AS TTOTPSMoyHr,
+		(double?)0 AS TCRAPSMaxHr,
+		(double?)0 AS TPDIAPSMaxHr,
+		(double?)0 AS TCRDPSMaxHr,
+		(double?)0 AS TPDDPSMaxHr,
+		(double?)0 AS TCREPSMaxHr,
+		(double?)0 AS TPDIEPSMaxHr,
+		(double?)0 AS TAVAPSMaxHr,
+		(double?)0 AS TAVEPSMaxHr,
+		(double?)0 AS TAVDPSMaxHr,
+		(double?)0 AS TATMAPSMaxHr,
+		(double?)0 AS TATMEPSMaxHr,
+		(double?)0 AS TAUTPSMaxHr,
+		(long?)0 AS TransacTPSMoy,
+		(int?)0 AS TransacTPSMax,
+		(int?)0 AS SeuilTPSMax
+	FROM @aqtiHr AS aqti;
+
+@monaHrExt =
+	SELECT
+		m.DateJMA,
+		m.Heure,
+		m.IDServeur,
+		(long?)0 AS UtilMemMoy,
+        (int?)0 AS UtilMemMax,
+        (int?)0 AS MemTotalMax,
+        (long?)0 AS UtilEspDisqMoy,
+        (int?)0 AS UtilEspDisqMax,
+        (int?)0 AS EspDisqTotalMax,
+        (long?)0 AS OpsCryptoMoy,
+        (int?)0 AS OpsCryptoMax,
+        (int?)0 AS SeuilEspDisqMax,
+        (long?)0 AS UtilCpuMoyHr,
+		(long?)0 AS UtilCpuMaxHr,
+		(int?)0 AS SeuilCpuMaxHr,
+		m.TCRASommeHr,
+		m.TPDIASommeHr,
+		m.TCRDSommeHr,
+		m.TPDDSommeHr,
+		m.TCRESommeHr,
+		m.TPDIESommeHr,
+		m.TAVASommeHr,
+		m.TAVESommeHr,
+		m.TAVDSommeHr,
+		m.TATMASommeHr,
+		m.TATMESommeHr,
+		m.TAUTSommeHr,
+		m.TTOTSommeHr,
+		m.TCRAPSMoyHr,
+		m.TPDIAPSMoyHr,
+		m.TCRDPSMoyHr,
+		m.TPDDPSMoyHr,
+		m.TCREPSMoyHr,
+		m.TPDIEPSMoyHr,
+		m.TAVAPSMoyHr,
+		m.TAVEPSMoyHr,
+		m.TAVDPSMoyHr,
+		m.TATMAPSMoyHr,
+		m.TATMEPSMoyHr,
+		m.TAUTPSMoyHr,
+		m.TTOTPSMoyHr,
+		m.TCRAPSMaxHr,
+		m.TPDIAPSMaxHr,
+		m.TCRDPSMaxHr,
+		m.TPDDPSMaxHr,
+		m.TCREPSMaxHr,
+		m.TPDIEPSMaxHr,
+		m.TAVAPSMaxHr,
+		m.TAVEPSMaxHr,
+		m.TAVDPSMaxHr,
+		m.TATMAPSMaxHr,
+		m.TATMEPSMaxHr,
+		m.TAUTPSMaxHr,
+		m.TransacTPSMoy,
+		m.TransacTPSMax,
+		m.SeuilTPSMax
+	FROM @detUVmonaHr AS m;
+
+@sommHeureMachines =
+	SELECT * FROM @aqtiHrExt
+	UNION ALL
+	SELECT * FROM @monaHrExt; 
+
+// Generation de cles
+@sommHeureMachines =
+	SELECT
+		String.Concat(DateJMA, Heure, IDServeur) AS Cle,
+        UtilMemMoy,
+        UtilMemMax,
+        MemTotalMax,
+        UtilEspDisqMoy,
+        UtilEspDisqMax,
+        EspDisqTotalMax,
+        OpsCryptoMoy,
+        OpsCryptoMax,
+        SeuilEspDisqMax,
+        UtilCpuMoyHr,
+        UtilCpuMaxHr,
+        SeuilCpuMaxHr,
+        TCRASommeHr,
+        TPDIASommeHr,
+        TCRDSommeHr,
+        TPDDSommeHr,
+        TCRESommeHr,
+        TPDIESommeHr,
+        TAVASommeHr,
+        TAVESommeHr,
+        TAVDSommeHr,
+        TATMASommeHr,
+        TATMESommeHr,
+        TAUTSommeHr,
+        TTOTSommeHr,
+        TCRAPSMoyHr,
+        TPDIAPSMoyHr,
+        TCRDPSMoyHr,
+        TPDDPSMoyHr,
+        TCREPSMoyHr,
+        TPDIEPSMoyHr,
+        TAVAPSMoyHr,
+        TAVEPSMoyHr,
+        TAVDPSMoyHr,
+        TATMAPSMoyHr,
+        TATMEPSMoyHr,
+        TAUTPSMoyHr,
+        TTOTPSMoyHr,
+        TCRAPSMaxHr,
+        TPDIAPSMaxHr,
+        TCRDPSMaxHr,
+        TPDDPSMaxHr,
+        TCREPSMaxHr,
+        TPDIEPSMaxHr,
+        TAVAPSMaxHr,
+        TAVEPSMaxHr,
+        TAVDPSMaxHr,
+        TATMAPSMaxHr,
+        TATMEPSMaxHr,
+        TAUTPSMaxHr,
+        TransacTPSMoy,
+        TransacTPSMax,
+        SeuilTPSMax
+    FROM @sommHeureMachines;
+
+// Extraire les rowsets outputs dans des fichiers
+OUTPUT @sommHeureReseau
+	TO @outputdir + @datejour + "_SommHeureReseau.csv"
+	USING Outputters.Csv();
+
+OUTPUT @sommHeureDisques
+	TO @outputdir + @datejour + "_SommHeureDisques.csv"
+	USING Outputters.Csv();
+
+OUTPUT @sommHeureMachines
+	TO @outputdir + @datejour + "_SommHeureMachines.csv"
+	USING Outputters.Csv();

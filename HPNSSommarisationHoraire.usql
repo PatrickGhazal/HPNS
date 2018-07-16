@@ -806,13 +806,13 @@ USING Outputters.Csv();
 
 // Extraire les rowsets outputs dans des fichiers
 OUTPUT @sommHeureReseau
-	TO @outputdir + "SommarisationMois/" + @datejour + "_SommHeureReseau.csv"
+	TO @outputdir + @datejour + "_SommHeureReseau.csv"
 	USING Outputters.Csv();
 
 OUTPUT @sommHeureDisques
-	TO @outputdir + "SommarisationMois/" + @datejour + "_SommHeureDisques.csv"
+	TO @outputdir + @datejour + "_SommHeureDisques.csv"
 	USING Outputters.Csv();
 
 OUTPUT @sommHeureMachines
-	TO @outputdir + "SommarisationMois/" + @datejour + "_SommHeureMachines.csv"
+	TO @outputdir + @datejour + "_SommHeureMachines.csv"
 	USING Outputters.Csv();

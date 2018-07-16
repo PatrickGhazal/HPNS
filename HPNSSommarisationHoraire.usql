@@ -1,8 +1,8 @@
 DECLARE @inputdir string = "/HPNSInput/";
 DECLARE @outputdir string = "/HPNSOutput/";
 DECLARE @annee string = "2018";
-DECLARE @mois string = "06";
-DECLARE @jour string = "02";
+DECLARE @mois string = "05";
+DECLARE @jour string = "08";
 DECLARE @datejour string = @annee + "-" + @mois + "-" + @jour;
 DECLARE @uctfilename = "_tandem_Cpu.csv{*}gz";
 DECLARE @memfilename = "_tandem_mem_esp_disk_crypto.csv{*}gz";
@@ -174,6 +174,10 @@ DECLARE @reseaufilename = "_tandem_reseau.csv{*}gz";
 		OpsCrypto,
 		SeuilEspDisq
 	FROM @meminput;
+
+OUTPUT @detMCD
+TO @outputdir + "Detail/" + "DetailMemCrypDisq.csv"
+USING Outputters.Csv();
 
 @detUVinputone =
 	SELECT
@@ -498,6 +502,10 @@ DECLARE @reseaufilename = "_tandem_reseau.csv{*}gz";
 	UNION ALL
 	SELECT * FROM @detUVvolumin;
 
+OUTPUT @detUV
+TO @outputdir + "Detail/" + "DetailUctVolum.csv"
+USING Outputters.Csv();
+
 // Fichiers Details termines, debut de la sommarisation pour Machines
 @detMCDHr =
 	SELECT
@@ -798,13 +806,13 @@ DECLARE @reseaufilename = "_tandem_reseau.csv{*}gz";
 
 // Extraire les rowsets outputs dans des fichiers
 OUTPUT @sommHeureReseau
-	TO @outputdir + @datejour + "_SommHeureReseau.csv"
+	TO @outputdir + "SommarisationMois/" + @datejour + "_SommHeureReseau.csv"
 	USING Outputters.Csv();
 
 OUTPUT @sommHeureDisques
-	TO @outputdir + @datejour + "_SommHeureDisques.csv"
+	TO @outputdir + "SommarisationMois/" + @datejour + "_SommHeureDisques.csv"
 	USING Outputters.Csv();
 
 OUTPUT @sommHeureMachines
-	TO @outputdir + @datejour + "_SommHeureMachines.csv"
+	TO @outputdir + "SommarisationMois/" + @datejour + "_SommHeureMachines.csv"
 	USING Outputters.Csv();
